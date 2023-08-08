@@ -1,0 +1,420 @@
+---
+title: "Timeseries"
+output:
+  pdf_document: default
+  html_document: default
+date: "2023-08-07"
+---
+
+```{r setup, results='hide'}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Time Series
+
+```{r, results='hide',message=FALSE}
+#libraries
+library(readxl)
+library(lubridate)
+library(zoo)
+library(xts)
+library(forecast)
+library(dplyr)
+```
+
+```{r}
+dir_name <- "Data Sources"
+file_name <- "NY-JFKairport-temperatures.csv"
+file_path <- paste(getwd(),dir_name,file_name,sep="/")
+```
+
+```{r}
+df_monthly <- read.csv(file_path)
+```
+
+#### Including Plots
+
+You can also embed plots, for example:
+
+```{r}
+head(df_monthly)
+```
+```{r}
+df_monthly$DATE <- as.Date(as.yearmon(df_monthly$DATE))
+df_monthly$Year <- floor_date(df_monthly$Date)
+```
+
+```{r pressure, results='hide'}
+plot(x = df_monthly$DATE, y = df_monthly$TAVG, type = "l")
+```
+
+### Issue with Time and How to Solve it
+1. Take consideration of Time Zone
+2. Daylight Savings Time
+
+How?
+
+Use UTC or GMT Time
+```{r}
+getwd()
+```
+
+```{r}
+dir_name <- "Data Sources"
+file_name_e <- "Raleigh-Durham_North_Carolina_area_electricity_demand.csv"
+file_path_e <- paste(getwd(),dir_name,file_name_e,sep="/")
+elec <- read.csv(file_path_e)
+```
+
+```{r}
+elec$LocalDatetime <- as.POSIXct(elec$Datetime, tz = "America/New_York")
+elec$UTC <- as_datetime(elec$Datetime)
+```
+
+```{r}
+zoo_monthly <- zoo(df_monthly$TAVG, df_monthly$DATE)
+xts_monthly <- xts(df_monthly$TAVG, df_monthly$DATE)
+```
+
+```{r}
+colnames(xts_monthly) <- c('Temperature')
+#convert xts to zoo
+#as.zoo(xts_monthly)
+```
+
+```{r}
+plot(xts_monthly, main = "Average Monthly Temperature", xlab=  "Month-Year",ylab = "Temperature(degrees Fahrenheit)", ylim = c(20,90))
+```
+
+Notice hotter temp in hotter months, lower temp in colder months
+
+```{r}
+#last 10 years
+plot(tail(zoo_monthly,120), main = "Average Monthly Temperature", xlab=  "Month-Year",ylab = "Temperature(degrees Fahrenheit)", ylim = c(20,90))
+```
+```{r}
+xts_electricity <- xts(elec$Demand, elec$LocalDatetime)
+#in xts function first argument goes to the column and second goes to row
+colnames(xts_electricity) <- c('Demand')
+```
+
+```{r}
+plot(tail(xts_electricity,24*7)) #how it oscillates for each week
+```
+
+```{r}
+zoo_elec <- zoo(elec$Demand, elec$UTC)
+plot(zoo_elec)
+```
+
+xts and zoo elec won't line up because xts used local time and zoo used UTC time!!
+
+```{r}
+df_monthly_again <- as.data.frame(xts_monthly)
+df_monthly_again$Date <- rownames(df_monthly_again)
+```
+
+
+#### Look at Subset of the data
+
+Filtering data that we want to look at
+```{r}
+df_monthly[df_monthly$TAVG == 76.9,]
+```
+
+#### Window function
+works on xts and zoo
+```{r}
+xts_monthly_2010s <- window(xts_monthly,start = "2010-01-01", end = "2019-12-31")
+```
+
+```{r}
+plot(window(xts_electricity, start = "2019-03-07", end="2019-03-14"))
+```
+
+Notice that there isn't any data
+
+#### how to fill in the empty value
+in excel it doesn't consider empty values
+```{r}
+window(zoo_monthly,start = "1948-07-01", end = "1948-12-01")
+```
+```{r}
+mean(window(zoo_monthly,start = "1948-07-01", end = "1948-12-01"))
+```
+```{r}
+mean(window(zoo_monthly,start = "1948-08-01", end = "1948-12-01"))
+```
+```{r}
+summary(xts_monthly)
+```
+Notice there are 2 NA's only
+```{r}
+xts_monthly <- na.omit(xts_monthly)
+```
+
+#### But how do you fill in the empty ones?
+```{r}
+plot(na.locf(window(zoo_elec, start = "2019-03-07", end="2019-03-14")))
+```
+This carries last observation forward until the new data value and fill in the NA with it
+```{r}
+zoo_update <-plot(window(xts_electricity, start = "2019-03-07", end="2019-03-14"))
+```
+
+#### Pivot table
+```{r}
+apply.daily(xts_electricity,sum)
+```
+```{r}
+apply.weekly(xts_electricity,sum)
+```
+```{r,results='hide'}
+apply.monthly(xts_electricity,sum)
+```
+```{r}
+apply.quarterly(xts_monthly,mean)
+```
+
+```{r}
+xts_yearly <- apply.yearly(xts_monthly,start = "1949-01-01", end = "2021-12-31",mean)
+```
+
+#### Line chart breakdown
+```{r}
+plot(decompose(ts(xts_monthly,frequency = 12)),ylim=c(30,100))
+```
+
+R doesn't know frequency --> convert time series with ts function
+
+1. Original Time series
+2. Trend
+fluctuate 50 ~58 --> smaller range
+narrower b/c it removes seasonality from the range
+3. Seasonal
+Look at the diff between hot and cold weather
+4. Random
+represent abnormalities in the data(look at the spike)
+
+
+```{r}
+plot(decompose(ts(window(xts_monthly,start = "2010-01-01", end = "2019-12-31"),frequency = 12)))
+```
+
+## ARIMA Model
+Autoregressive integrated moving average
+=arima(<time series object>, order = c(p,d,q))
+p,d,q vector
+
+ARIMA models: fitted
+
+```{r}
+results_yearly <-arima(xts_yearly,order=c(0,0,0))
+```
+
+```{r}
+mean(xts_yearly)
+```
+
+```{r}
+xts_yearly_fitted <- merge(xts_yearly, xts(fitted(results_yearly),index(xts_yearly)))
+colnames(xts_yearly_fitted) <- c('Temperature','Fitted')
+```
+
+```{r}
+plot(xts_yearly_fitted,col=c('black','orange'))
+```
+#### calculate std dev
+```{r}
+sd(xts_yearly)
+```
+```{r}
+predict(results_yearly,10)
+```
+```{r}
+plot(forecast(results_yearly,10), xaxt = 'n', xlab="Year",ylab="Temperature (degrees F)")
+axis(1, at = c(2,12,22,32,42,52,62,72), labels=c(1950,1960,1970,1980,1990,2000,2010,2020))
+#xaxt='n' removes tickmarks
+#reference x axis = axis(1,)
+```
+Forecasted future temp as Blue line
+80% CI blue box, 90% CI grey box
+
+
+```{r}
+
+
+```
+
+
+
+Aggregating data -> github.com/helenrmwall/Time-Series-Models
+Use hourly electricity demand for San Diego stored on GitHub and in exercise files
+Determine which week over an entire time period has highest total electricity demand
+set tz = "America/Los_Angeles"
+
+```{r}
+file_name_sd <- "San Diego electricity demand.csv"
+file_path_sd <- paste(getwd(),dir_name,file_name_sd,sep="/")
+df_sandiego <- read.csv(file_path_sd)
+```
+```{r}
+df_sandiego$LocalDateTime <- as.POSIXct(df_sandiego$Datetime,tz="America/Los_Angeles")
+```
+```{r}
+xts_sandiego <- xts(df_sandiego$Demand,df_sandiego$LocalDateTime)
+colnames(xts_sandiego) <- c('demand')
+```
+```{r}
+plot(apply.weekly(xts_sandiego,sum))
+```
+
+```{r}
+df_sandiego_weekly <- as.data.frame(apply.weekly(xts_sandiego,sum))
+df_sandiego_weekly$Date <- as.Date(rownames(df_sandiego_weekly))
+df_sandiego_weekly[df_sandiego_weekly$demand == max(df_sandiego_weekly$demand),]
+```
+
+#### Linear Regression
+```{r}
+m <- lm(coredata(xts_yearly) ~ index(xts_yearly))
+xts_yearly_lm <- merge(xts_yearly,xts(predict(m, newdata = xts_yearly, response="type"),index(xts_yearly)))
+colnames(xts_yearly_lm) <- c('Temperature','Fitted')
+```
+
+```{r}
+plot(xts_yearly_lm, col=c('black','orange'))
+```
+
+#### Residuals
+```{r}
+residuals <- xts(resid(m),index(xts_yearly))
+plot(zoo(residuals))
+abline(h=0,col='orange',lwd=3)
+```
+
+#### Lag
+Delay or move a time series by n periods of time
+Line up separate time data observatiosn
+Bootstrap dat within single time series
+
+```{r, results='hide'}
+lead(xts_yearly,1)
+#lag(xts_yearly,1)
+```
+
+```{r}
+xts_monthly_lagged <- xts_monthly
+for (i in 1:12) {
+  xts_monthly_lagged <- merge(xts_monthly_lagged,lag(xts_monthly,i))
+}
+```
+
+
+#### Autoregression
+Autoregression coefficient of 1 = linear fit of current point and the point right before it
+= 2 points & 1 line
+
+```{r}
+results_yearly <-arima(xts_yearly,order=c(2,0,0))
+xts_yearly_fitted <- merge(xts_yearly, xts(fitted(results_yearly),index(xts_yearly)))
+colnames(xts_yearly_fitted) <- c('Temperature','Fitted')
+plot(xts_yearly_fitted,col=c('black','orange'))
+```
+
+#### Moving Averages, Rolling Averages
+Even out fluctuations within time seires models
+moving average of period of 2 --> use from one previous to one future (total of 3)
+
+```{r}
+xts_yearly_rolling <- merge(xts_yearly,rollmean(xts_yearly,2,align='left'))
+plot(xts_yearly_rolling,col=c('black','orange'))
+```
+
+```{r}
+plot(xts_sandiego)
+```
+
+```{r}
+m_sandiego <- lm(coredata(xts_sandiego)~index(xts_sandiego))
+m_sandiego
+```
+```{r}
+xts_sandiego_lm <- merge(xts(predict(m_sandiego,newdata=xts_sandiego,response='type'),index(xts_sandiego)),xts_sandiego)
+```
+
+```{r}
+colnames(xts_sandiego_lm) <- c('Fitted','Demand')
+plot(xts_sandiego_lm,col=c('black','grey'))
+```
+
+#### Autocorrelation
+```{r}
+plot(xts_monthly)
+pairs(as.data.frame(na.omit(xts_monthly_lagged)),xaxt='n',yaxt='n',pch=20)
+```
+```{r}
+#cor(na.omit(xts_monthly_lagged))
+acf(xts_monthly,plot=FALSE,lag.max = 12)
+```
+This compares value of current to the subsequent month. For example, it compares 1st month to 2nd month, 2nd to 3rd, ...
+
+#### Partial Autocorrelation
+Steps between the lags of the model
+
+```{r}
+pacf(xts_monthly)
+```
+```{r}
+pacf(xts_monthly,plot=FALSE,lag.max=12)
+```
+#### Stationarities
+```{r}
+plot(xts_yearly)
+```
+```{r}
+plot(diff(zoo(xts_yearly)))
+abline(h=0,col='orange',lwd=3)
+```
+
+```{r}
+results_yearly <-arima(xts_yearly,order=c(0,1,0))
+xts_yearly_fitted <- merge(xts_yearly, xts(fitted(results_yearly),index(xts_yearly)))
+colnames(xts_yearly_fitted) <- c('Temperature','Fitted')
+plot(xts_yearly_fitted,col=c('black','orange'))
+```
+```{r}
+plot(forecast(results_yearly,10), xaxt = 'n', xlab="Year",ylab="Temperature (degrees F)")
+axis(1, at = c(2,12,22,32,42,52,62,72), labels=c(1950,1960,1970,1980,1990,2000,2010,2020))
+```
+
+```{r}
+pacf(xts_yearly)
+```
+1st 0.4, 4th 0.3
+```{r}
+acf(xts_yearly)
+```
+first 2 pair strong coefficient
+```{r}
+results_yearly <-auto.arima(xts_yearly)
+results_yearly
+```
+p = 0 d = 1 q = 2
+
+```{r}
+confint(results_yearly)
+```
+
+```{r}
+xts_yearly_fitted <- merge(xts_yearly, xts(fitted(results_yearly),index(xts_yearly)))
+colnames(xts_yearly_fitted) <- c('Temperature','Fitted')
+plot(xts_yearly_fitted,col=c('black','orange'))
+```
+```{r}
+auto.arima(xts_monthly,D=12, max.p=24, max.q=24)
+```
+
+
+
+
